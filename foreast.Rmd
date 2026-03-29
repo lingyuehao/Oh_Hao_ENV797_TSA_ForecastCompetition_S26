@@ -102,27 +102,28 @@ valid_data <- daily_data %>%
 ```
 
 ```{r}
- # create time series
+# create time series with weekly seasonality
 train_ts <- ts(train_data$load_daily, frequency = 7)
 
-# seasonal naive forecast for validation period
-fc_snaive <- snaive(train_ts, h = nrow(valid_data))
+# seasonal exponential smoothing model (ETS) for validation period
+fit_ets <- ets(train_ts)
+fc_ets <- forecast(fit_ets, h = nrow(valid_data))
 
 # accuracy
-accuracy(fc_snaive, valid_data$load_daily)
+accuracy(fc_ets, valid_data$load_daily)
 
 # plot actual vs forecast on validation dates
 validation_results <- data.frame(
   date = valid_data$date,
   actual = valid_data$load_daily,
-  forecast = as.numeric(fc_snaive$mean)
+  forecast = as.numeric(fc_ets$mean)
 )
 
 ggplot(validation_results, aes(x = date)) +
   geom_line(aes(y = actual, color = "Actual"), linewidth = 1) +
-  geom_line(aes(y = forecast, color = "Forecast"), linewidth = 1) +
+  geom_line(aes(y = forecast, color = "ETS"), linewidth = 1) +
   labs(
-    title = "Seasonal Naive: Validation Forecast vs Actual",
+    title = "ETS: Validation Forecast vs Actual",
     x = "Date",
     y = "Daily Load",
     color = ""
@@ -132,30 +133,25 @@ ggplot(validation_results, aes(x = date)) +
 
 
 ```{r}
- # use all available historical data up to 2011-06-30
+# use all available historical data up to 2011-06-30
 full_data <- daily_data %>%
   filter(date >= as.Date("2005-01-01"),
          date <= as.Date("2011-06-30")) %>%
   arrange(date)
 
-# create weekly seasonal time series
+# create time series with weekly seasonality
 full_ts <- ts(full_data$load_daily, frequency = 7)
 
-# fit seasonal naive model and forecast for the submission horizon
-final_fc <- snaive(full_ts, h = nrow(sub_template))
+# fit ETS model and forecast submission period
+final_ets <- ets(full_ts)
+final_fc <- forecast(final_ets, h = nrow(sub_template))
 
-# create final submission file in the same format as the template
+# create final submission file
 submission <- sub_template %>%
   mutate(load = as.numeric(final_fc$mean))
 
-# quick checks
-head(submission)
-tail(submission)
-sum(is.na(submission$load))
-nrow(submission)
-
 # save csv
-write.csv(submission, "submission_snaive.csv", row.names = FALSE)
+write.csv(submission, "submission_ets.csv", row.names = FALSE)
 ```
 
 ```{r}
