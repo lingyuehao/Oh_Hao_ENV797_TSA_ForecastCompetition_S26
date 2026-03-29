@@ -1,0 +1,188 @@
+
+
+```{r}
+library(readxl)
+library(dplyr)
+library(tidyr)
+library(lubridate)
+library(stringr)
+library(forecast)
+library(ggplot2)
+
+```
+
+```{r}
+load_raw <- read_excel("load.xlsx")
+temp_raw <- read_excel("temperature.xlsx")
+rh_raw   <- read_excel("relative_humidity.xlsx")
+sub_template <- read.csv("submission_template.csv")
+```
+
+
+```{r}
+glimpse(load_raw)
+glimpse(temp_raw)
+glimpse(rh_raw)
+```
+
+
+```{r}
+names(load_raw)
+names(temp_raw)
+names(rh_raw)
+
+head(load_raw)
+head(temp_raw)
+head(rh_raw)
+
+```
+
+
+
+```{r}
+## transfer load to daily
+load_daily <- load_raw %>%
+  mutate(date = as.Date(date)) %>%
+  mutate(
+    load_daily = rowMeans(select(., starts_with("h")), na.rm = TRUE)
+  ) %>%
+  select(date, load_daily)
+```
+
+```{r}
+## transfer temp to daily
+temp_daily <- temp_raw %>%
+  mutate(date = as.Date(date)) %>%
+  mutate(
+    temp_hourly_avg = rowMeans(select(., starts_with("t_ws")), na.rm = TRUE)
+  ) %>%
+  group_by(date) %>%
+  summarise(
+    temp_daily = mean(temp_hourly_avg, na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+
+```{r}
+## transfer humidity to daily
+rh_daily <- rh_raw %>%
+  mutate(date = as.Date(date)) %>%
+  mutate(
+    rh_hourly_avg = rowMeans(select(., starts_with("rh_ws")), na.rm = TRUE)
+  ) %>%
+  group_by(date) %>%
+  summarise(
+    rh_daily = mean(rh_hourly_avg, na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+```{r}
+## combine daily data
+daily_data <- load_daily %>%
+  left_join(temp_daily, by = "date") %>%
+  left_join(rh_daily, by = "date")
+
+glimpse(daily_data)
+head(daily_data)
+summary(daily_data)
+colSums(is.na(daily_data))
+```
+
+
+```{r}
+## split train and validation data
+ train_data <- daily_data %>%
+  filter(date <= as.Date("2010-06-30"))
+
+valid_data <- daily_data %>%
+  filter(date >= as.Date("2010-07-01") &
+         date <= as.Date("2010-07-31"))
+```
+
+```{r}
+ # create time series
+train_ts <- ts(train_data$load_daily, frequency = 7)
+
+# seasonal naive forecast for validation period
+fc_snaive <- snaive(train_ts, h = nrow(valid_data))
+
+# accuracy
+accuracy(fc_snaive, valid_data$load_daily)
+
+# plot actual vs forecast on validation dates
+validation_results <- data.frame(
+  date = valid_data$date,
+  actual = valid_data$load_daily,
+  forecast = as.numeric(fc_snaive$mean)
+)
+
+ggplot(validation_results, aes(x = date)) +
+  geom_line(aes(y = actual, color = "Actual"), linewidth = 1) +
+  geom_line(aes(y = forecast, color = "Forecast"), linewidth = 1) +
+  labs(
+    title = "Seasonal Naive: Validation Forecast vs Actual",
+    x = "Date",
+    y = "Daily Load",
+    color = ""
+  ) +
+  theme_minimal()
+```
+
+
+```{r}
+ # use all available historical data up to 2011-06-30
+full_data <- daily_data %>%
+  filter(date >= as.Date("2005-01-01"),
+         date <= as.Date("2011-06-30")) %>%
+  arrange(date)
+
+# create weekly seasonal time series
+full_ts <- ts(full_data$load_daily, frequency = 7)
+
+# fit seasonal naive model and forecast for the submission horizon
+final_fc <- snaive(full_ts, h = nrow(sub_template))
+
+# create final submission file in the same format as the template
+submission <- sub_template %>%
+  mutate(load = as.numeric(final_fc$mean))
+
+# quick checks
+head(submission)
+tail(submission)
+sum(is.na(submission$load))
+nrow(submission)
+
+# save csv
+write.csv(submission, "submission_snaive.csv", row.names = FALSE)
+```
+
+```{r}
+
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+
+
