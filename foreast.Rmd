@@ -468,7 +468,7 @@ write.csv(
 
 
 ```{r}
-# ── ARIMA + Fourier Model Training ─────────────────────────
+#  ARIMA + Fourier Model Training 
 K <- c(2, 2)
 
 train_fourier <- fourier(train_msts_load, K = K)
@@ -511,7 +511,7 @@ ggplot(validation_results_arima_fourier, aes(x = date)) +
 ```
 
 ```{r}
-# ── ARIMA + Fourier Model Forecast  ─────────────────────────
+# ARIMA + Fourier Model Forecast  
 K <- c(2, 2)
 
 full_fourier <- fourier(full_msts_load, K = K)
@@ -974,7 +974,6 @@ write.csv(submission_ets_tuned, "submission_ets_tuned.csv", row.names = FALSE)
 
 ```{r}
 #  ETS on log-transformed data  
-
 # log transform
 train_ts_log <- ts(log(train_data$load_daily), frequency = 7)
 full_ts_log  <- ts(log(full_data$load_daily), frequency = 7)
@@ -1061,7 +1060,7 @@ for (w_ets in weights_to_try) {
 
 
 ```{r}
-#   ETS with Validation-based Bias Correction 
+# ETS with Validation-based Bias Correction 
 #  Refit ETS on training set to evaluate bias on validation
 fit_ets_R <- ets(train_ts)
 fc_ets_R  <- forecast(fit_ets_R, h = nrow(valid_data))
@@ -1090,6 +1089,7 @@ write.csv(submission_ets_biascorr, "submission_ets_biascorr.csv", row.names = FA
 # Preview
 head(submission_ets_biascorr)
 ```
+
 ### Some Analysis based on bias pattern:
 
 ```{r}
@@ -1125,7 +1125,7 @@ weekday_bias <- residuals_df %>%
   )
 print(weekday_bias)
 
-# 3. Bias trend over time (is bias growing or shrinking through July?)
+# 3. Bias trend over time  
 cat("\n=== Bias by week-of-month ===\n")
 residuals_df$week_of_month <- ceiling(residuals_df$day_of_month / 7)
 weekly_bias <- residuals_df %>%
