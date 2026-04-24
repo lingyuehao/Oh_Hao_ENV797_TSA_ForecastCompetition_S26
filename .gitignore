@@ -48,3 +48,8 @@ po/*~
 # RStudio Connect folder
 rsconnect/
 submission_*.csv
+
+!output/
+!output/*.csv
+
+
