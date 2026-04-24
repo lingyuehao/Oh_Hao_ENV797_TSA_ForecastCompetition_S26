@@ -110,7 +110,6 @@ daily_load_temp <- daily_data %>%
   select(date, load_daily, temp_daily)
 
 glimpse(daily_load_temp)
-glimpse(daily_load_weather)
 ```
 
 # Train/Validation split
@@ -894,3 +893,296 @@ write.csv(submission_ensemble_w,
 head(submission_ensemble_w)
 ```
 
+```{r}
+# STLF + ETS  
+
+fit_stlf_ets <- stlf(train_msts_load,
+                     h = nrow(valid_data),
+                     method = "ets",
+                     s.window = "periodic",
+                     robust = TRUE)
+
+ac_stlf_ets <- accuracy(fit_stlf_ets, valid_data$load_daily)
+print(ac_stlf_ets)
+
+# final forecast
+fit_stlf_ets_final <- stlf(full_msts_load,
+                           h = nrow(sub_template),
+                           method = "ets",
+                           s.window = "periodic",
+                           robust = TRUE)
+
+submission_stlf_ets <- sub_template %>%
+  mutate(load = as.numeric(fit_stlf_ets_final$mean))
+
+write.csv(submission_stlf_ets, "submission_stlf_ets.csv", row.names = FALSE)
+```
+
+```{r}
+#  Ensemble of Top 2 (ETS + TBATS) 
+sub_ets   <- read.csv("submission_ets.csv")
+sub_tbats <- read.csv("submission_tbats.csv")
+
+submission_ens_top2 <- sub_template %>%
+  mutate(load = (sub_ets$load + sub_tbats$load) / 2)
+
+write.csv(submission_ens_top2, "submission_ens_top2.csv", row.names = FALSE)
+```
+
+```{r}
+# ETS-heavy Weighted Ensemble 
+sub_ets   <- read.csv("submission_ets.csv")
+sub_tbats <- read.csv("submission_tbats.csv")
+
+ 
+submission_ens_ets_heavy <- sub_template %>%
+  mutate(load = 0.7 * sub_ets$load + 0.3 * sub_tbats$load)
+
+write.csv(submission_ens_ets_heavy,
+          "submission_ens_ets_heavy.csv", row.names = FALSE)
+```
+
+```{r}
+#  ETS with explicit weekly seasonality tuning  
+
+fit_ets_AAA <- ets(train_ts, model = "AAA")
+fc_ets_AAA <- forecast(fit_ets_AAA, h = nrow(valid_data))
+print(accuracy(fc_ets_AAA, valid_data$load_daily))
+
+fit_ets_AAdA <- ets(train_ts, model = "AAA", damped = TRUE)
+fc_ets_AAdA <- forecast(fit_ets_AAdA, h = nrow(valid_data))
+print(accuracy(fc_ets_AAdA, valid_data$load_daily))
+
+mape_AAA  <- accuracy(fc_ets_AAA,  valid_data$load_daily)["Test set","MAPE"]
+mape_AAdA <- accuracy(fc_ets_AAdA, valid_data$load_daily)["Test set","MAPE"]
+
+if (mape_AAdA < mape_AAA) {
+  cat("Winner: AAdA (damped)\n")
+  fit_final <- ets(full_ts, model = "AAA", damped = TRUE)
+} else {
+  cat("Winner: AAA\n")
+  fit_final <- ets(full_ts, model = "AAA")
+}
+
+fc_final <- forecast(fit_final, h = nrow(sub_template))
+
+submission_ets_tuned <- sub_template %>%
+  mutate(load = as.numeric(fc_final$mean))
+
+write.csv(submission_ets_tuned, "submission_ets_tuned.csv", row.names = FALSE)
+```
+
+```{r}
+#  ETS on log-transformed data  
+
+# log transform
+train_ts_log <- ts(log(train_data$load_daily), frequency = 7)
+full_ts_log  <- ts(log(full_data$load_daily), frequency = 7)
+
+# training on log scale
+fit_ets_log <- ets(train_ts_log)
+fc_ets_log <- forecast(fit_ets_log, h = nrow(valid_data))
+
+fc_ets_log_mean <- exp(as.numeric(fc_ets_log$mean))
+
+# accuracy
+print(fit_ets_log)   
+cat("MAPE:",
+    mean(abs(fc_ets_log_mean - valid_data$load_daily) / valid_data$load_daily) * 100,
+    "\n")
+
+# plot
+validation_results_ets_log <- data.frame(
+  date = valid_data$date,
+  actual = valid_data$load_daily,
+  forecast = fc_ets_log_mean
+)
+
+ggplot(validation_results_ets_log, aes(x = date)) +
+  geom_line(aes(y = actual, color = "Actual"), linewidth = 1) +
+  geom_line(aes(y = forecast, color = "ETS-log"), linewidth = 1) +
+  labs(title = "ETS on log-transformed data", x = "Date", y = "Daily Load", color = "") +
+  theme_minimal()
+
+# final forecast  
+fit_ets_log_final <- ets(full_ts_log)
+fc_ets_log_final <- forecast(fit_ets_log_final, h = nrow(sub_template))
+
+submission_ets_log <- sub_template %>%
+  mutate(load = exp(as.numeric(fc_ets_log_final$mean)))
+
+write.csv(submission_ets_log, "submission_ets_log.csv", row.names = FALSE)
+```
+
+```{r}
+# ETS trained on recent 3 years only 
+
+train_data_recent <- train_data %>%
+  filter(date >= as.Date("2008-07-01"))
+
+full_data_recent <- full_data %>%
+  filter(date >= as.Date("2008-07-01"))
+
+train_ts_recent <- ts(train_data_recent$load_daily, frequency = 7)
+full_ts_recent  <- ts(full_data_recent$load_daily, frequency = 7)
+fit_ets_recent <- ets(train_ts_recent)
+fc_ets_recent <- forecast(fit_ets_recent, h = nrow(valid_data))
+
+print(fit_ets_recent)
+print(accuracy(fc_ets_recent, valid_data$load_daily))
+
+fit_ets_recent_final <- ets(full_ts_recent)
+fc_ets_recent_final <- forecast(fit_ets_recent_final, h = nrow(sub_template))
+
+submission_ets_recent <- sub_template %>%
+  mutate(load = as.numeric(fc_ets_recent_final$mean))
+
+write.csv(submission_ets_recent, "submission_ets_recent.csv", row.names = FALSE)
+```
+
+```{r}
+# Fine-grained weight search for ETS + TBATS 
+sub_ets   <- read.csv("submission_ets.csv")
+sub_tbats <- read.csv("submission_tbats.csv")
+
+weights_to_try <- c(0.60, 0.65, 0.75, 0.80, 0.85)
+
+for (w_ets in weights_to_try) {
+  w_tbats <- 1 - w_ets
+  sub_tmp <- sub_template %>%
+    mutate(load = w_ets * sub_ets$load + w_tbats * sub_tbats$load)
+  
+  fname <- sprintf("submission_ens_ets%02d_tbats%02d.csv",
+                   round(w_ets * 100), round(w_tbats * 100))
+  write.csv(sub_tmp, fname, row.names = FALSE)
+  cat("Saved:", fname, "\n")
+}
+```
+
+
+```{r}
+#   ETS with Validation-based Bias Correction 
+#  Refit ETS on training set to evaluate bias on validation
+fit_ets_R <- ets(train_ts)
+fc_ets_R  <- forecast(fit_ets_R, h = nrow(valid_data))
+
+# Compute mean systematic bias (actual - forecast) on validation
+residuals_valid <- valid_data$load_daily - as.numeric(fc_ets_R$mean)
+mean_bias   <- mean(residuals_valid)
+median_bias <- median(residuals_valid)
+mean_fc     <- mean(fc_ets_R$mean)
+
+cat("Mean bias on validation:", round(mean_bias, 4), "\n")
+cat("Median bias on validation:", round(median_bias, 4), "\n")
+cat("Mean forecast value:", round(mean_fc, 4), "\n")
+cat("Relative mean bias (%):", round(mean_bias / mean_fc * 100, 2), "%\n")
+
+#   Generate final forecast and apply mean bias correction
+fit_ets_final <- ets(full_ts)
+fc_ets_final  <- forecast(fit_ets_final, h = nrow(sub_template))
+
+# Apply additive mean bias correction
+submission_ets_biascorr <- sub_template %>%
+  mutate(load = as.numeric(fc_ets_final$mean) + mean_bias)
+
+write.csv(submission_ets_biascorr, "submission_ets_biascorr.csv", row.names = FALSE)
+
+# Preview
+head(submission_ets_biascorr)
+```
+### Some Analysis based on bias pattern:
+
+```{r}
+
+library(lubridate)
+
+# Recompute validation residuals (actual - forecast)
+fit_ets_diag <- ets(train_ts)
+fc_ets_diag  <- forecast(fit_ets_diag, h = nrow(valid_data))
+
+residuals_df <- data.frame(
+  date = valid_data$date,
+  actual = valid_data$load_daily,
+  forecast = as.numeric(fc_ets_diag$mean),
+  residual = valid_data$load_daily - as.numeric(fc_ets_diag$mean),
+  weekday = wday(valid_data$date, label = TRUE),
+  day_of_month = day(valid_data$date)
+)
+
+# 1. Overall bias stats
+cat("=== Overall bias ===\n")
+cat("Mean bias:    ", round(mean(residuals_df$residual), 4), "\n")
+cat("Median bias:  ", round(median(residuals_df$residual), 4), "\n")
+cat("SD of bias:   ", round(sd(residuals_df$residual), 4), "\n\n")
+
+# 2. Bias by weekday
+cat("=== Bias by weekday ===\n")
+weekday_bias <- residuals_df %>%
+  group_by(weekday) %>%
+  summarise(
+    mean_bias = round(mean(residual), 4),
+    n = n()
+  )
+print(weekday_bias)
+
+# 3. Bias trend over time (is bias growing or shrinking through July?)
+cat("\n=== Bias by week-of-month ===\n")
+residuals_df$week_of_month <- ceiling(residuals_df$day_of_month / 7)
+weekly_bias <- residuals_df %>%
+  group_by(week_of_month) %>%
+  summarise(
+    mean_bias = round(mean(residual), 4),
+    n = n()
+  )
+print(weekly_bias)
+
+# 4. Visualize residuals over time
+ggplot(residuals_df, aes(x = date, y = residual)) +
+  geom_line(color = "steelblue") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  geom_hline(yintercept = mean(residuals_df$residual),
+             linetype = "dashed", color = "darkgreen") +
+  labs(title = "ETS Residuals on Validation (July 2010)",
+       subtitle = "Red = zero, Green = mean bias",
+       x = "Date", y = "Residual (Actual - Forecast)") +
+  theme_minimal()
+```
+
+
+
+```{r}
+#  ETS with Median Bias Correction  
+
+submission_ets_median_bias <- sub_template %>%
+  mutate(load = as.numeric(fc_ets_final$mean) + median_bias)
+
+write.csv(submission_ets_median_bias, 
+          "submission_ets_median_bias.csv", row.names = FALSE)
+
+cat("Median bias used:", round(median_bias, 4), "\n")
+cat("Mean bias was:   ", round(mean_bias, 4), "\n")
+cat("Difference:      ", round(median_bias - mean_bias, 4), "\n")
+
+head(submission_ets_median_bias)
+```
+
+```{r}
+# ETS with Trimmed Mean Bias Correction  
+# Compute trimmed mean (drop 10% from each tail)
+trimmed_bias_10 <- mean(residuals_valid, trim = 0.10)
+trimmed_bias_20 <- mean(residuals_valid, trim = 0.20)
+
+cat("Mean bias:           ", round(mean_bias, 4), "\n")
+cat("Trimmed mean (10%):  ", round(trimmed_bias_10, 4), "\n")
+cat("Trimmed mean (20%):  ", round(trimmed_bias_20, 4), "\n")
+cat("Median bias:         ", round(median_bias, 4), "\n")
+
+# Generate submission with 10% trimmed mean
+submission_ets_trimmed10 <- sub_template %>%
+  mutate(load = as.numeric(fc_ets_final$mean) + trimmed_bias_10)
+
+write.csv(submission_ets_trimmed10, 
+          "submission_ets_trimmed10.csv", row.names = FALSE)
+
+head(submission_ets_trimmed10)
+```
