@@ -674,3 +674,223 @@ write.csv(
   row.names = FALSE
 )
 ```
+
+```{r}
+# Neural Network (NNAR) + Fourier  
+
+set.seed(797)   
+
+K_nn <- c(2, 6)  
+
+# training
+train_fourier_nn <- fourier(train_msts_load, K = K_nn)
+valid_fourier_nn <- fourier(train_msts_load, K = K_nn, h = nrow(valid_data))
+
+fit_nnar <- nnetar(
+  train_msts_load,
+  p = 2, P = 1,
+  xreg = train_fourier_nn
+)
+
+fc_nnar <- forecast(fit_nnar, xreg = valid_fourier_nn, h = nrow(valid_data))
+
+ac_nnar <- accuracy(fc_nnar, valid_data$load_daily)
+print(ac_nnar)
+
+# plot
+validation_results_nnar <- data.frame(
+  date = valid_data$date,
+  actual = valid_data$load_daily,
+  forecast = as.numeric(fc_nnar$mean)
+)
+
+ggplot(validation_results_nnar, aes(x = date)) +
+  geom_line(aes(y = actual, color = "Actual"), linewidth = 1) +
+  geom_line(aes(y = forecast, color = "NNAR"), linewidth = 1) +
+  labs(title = "NNAR + Fourier: Validation vs Actual",
+       x = "Date", y = "Daily Load", color = "") +
+  theme_minimal()
+
+#  final forecast 
+set.seed(797)
+full_fourier_nn   <- fourier(full_msts_load, K = K_nn)
+future_fourier_nn <- fourier(full_msts_load, K = K_nn, h = nrow(sub_template))
+
+fit_nnar_final <- nnetar(
+  full_msts_load,
+  p = 2, P = 1,
+  xreg = full_fourier_nn
+)
+
+fc_nnar_final <- forecast(fit_nnar_final,
+                          xreg = future_fourier_nn,
+                          h = nrow(sub_template))
+
+submission_nnar <- sub_template %>%
+  mutate(load = as.numeric(fc_nnar_final$mean))
+
+write.csv(submission_nnar, "submission_nnar_fourier.csv", row.names = FALSE)
+```
+
+```{r}
+# ARIMA + Fourier with Extended K Grid  
+
+K_grid_ext <- list(
+  c(2, 6),
+  c(3, 6),
+  c(2, 8),
+  c(3, 8),
+  c(2, 10),
+  c(3, 10),
+  c(2, 12)
+)
+
+results_ext <- data.frame()
+best_mape_ext <- Inf
+best_K_ext <- NULL
+
+for (K in K_grid_ext) {
+  
+  train_f <- fourier(train_msts_load, K = K)
+  valid_f <- fourier(train_msts_load, K = K, h = nrow(valid_data))
+  
+  fit_tmp <- auto.arima(train_data_load$load_daily,
+                        xreg = train_f,
+                        seasonal = FALSE,
+                        stepwise = TRUE,       # faster
+                        approximation = TRUE)
+  
+  fc_tmp <- forecast(fit_tmp, xreg = valid_f)
+  acc_tmp <- accuracy(fc_tmp, valid_data$load_daily)
+  
+  results_ext <- rbind(results_ext, data.frame(
+    K_weekly = K[1],
+    K_yearly = K[2],
+    AICc = fit_tmp$aicc,
+    MAPE = acc_tmp["Test set", "MAPE"],
+    RMSE = acc_tmp["Test set", "RMSE"]
+  ))
+  
+  if (acc_tmp["Test set", "MAPE"] < best_mape_ext) {
+    best_mape_ext <- acc_tmp["Test set", "MAPE"]
+    best_K_ext <- K
+  }
+}
+
+results_ext <- results_ext %>% arrange(MAPE)
+print(results_ext)
+cat("Best K (extended):", best_K_ext[1], best_K_ext[2],
+    " | Validation MAPE:", best_mape_ext, "\n")
+
+# final forecast with best K  
+full_f_ext   <- fourier(full_msts_load, K = best_K_ext)
+future_f_ext <- fourier(full_msts_load, K = best_K_ext, h = nrow(sub_template))
+
+fit_ext_final <- auto.arima(full_data_load$load_daily,
+                            xreg = full_f_ext,
+                            seasonal = FALSE,
+                            stepwise = FALSE,
+                            approximation = FALSE)
+
+fc_ext_final <- forecast(fit_ext_final, xreg = future_f_ext)
+
+submission_arima_fourier_extK <- sub_template %>%
+  mutate(load = as.numeric(fc_ext_final$mean))
+
+write.csv(submission_arima_fourier_extK,
+          "submission_arima_fourier_extK.csv",
+          row.names = FALSE)
+```
+
+```{r}
+#  STLF + ARIMA
+
+# training
+fit_stlf <- stlf(train_msts_load,
+                 h = nrow(valid_data),
+                 method = "arima",
+                 s.window = "periodic",
+                 robust = TRUE)
+
+ac_stlf <- accuracy(fit_stlf, valid_data$load_daily)
+print(ac_stlf)
+
+# plot
+validation_results_stlf <- data.frame(
+  date = valid_data$date,
+  actual = valid_data$load_daily,
+  forecast = as.numeric(fit_stlf$mean)
+)
+
+ggplot(validation_results_stlf, aes(x = date)) +
+  geom_line(aes(y = actual, color = "Actual"), linewidth = 1) +
+  geom_line(aes(y = forecast, color = "STLF+ARIMA"), linewidth = 1) +
+  labs(title = "STLF + ARIMA: Validation vs Actual",
+       x = "Date", y = "Daily Load", color = "") +
+  theme_minimal()
+
+#   final forecast 
+fit_stlf_final <- stlf(full_msts_load,
+                       h = nrow(sub_template),
+                       method = "arima",
+                       s.window = "periodic",
+                       robust = TRUE)
+
+submission_stlf <- sub_template %>%
+  mutate(load = as.numeric(fit_stlf_final$mean))
+
+write.csv(submission_stlf, "submission_stlf_arima.csv", row.names = FALSE)
+```
+
+```{r}
+# Ensemble (Simple Average) 
+sub_tbats         <- read.csv("submission_tbats.csv")
+sub_arima_fourier <- read.csv("submission_arima_fourier.csv")
+sub_nnar          <- read.csv("submission_nnar_fourier.csv")
+sub_stlf          <- read.csv("submission_stlf_arima.csv")
+
+# simple average of 4 models
+submission_ensemble_avg <- sub_template %>%
+  mutate(load = (sub_tbats$load +
+                 sub_arima_fourier$load +
+                 sub_nnar$load +
+                 sub_stlf$load) / 4)
+
+write.csv(submission_ensemble_avg,
+          "submission_ensemble_avg.csv",
+          row.names = FALSE)
+
+head(submission_ensemble_avg)
+```
+
+```{r}
+# Ensemble (Weighted by Validation MAPE)
+ 
+mape_tbats         <- accuracy(fc_tbats, valid_data$load_daily)["Test set", "MAPE"]
+mape_arima_fourier <- accuracy(fc_arima_fourier, valid_data$load_daily)["Test set", "MAPE"]
+mape_nnar          <- accuracy(fc_nnar, valid_data$load_daily)["Test set", "MAPE"]
+mape_stlf          <- accuracy(fit_stlf, valid_data$load_daily)["Test set", "MAPE"]
+
+cat("TBATS         MAPE:", round(mape_tbats, 4), "\n")
+cat("ARIMA+Fourier MAPE:", round(mape_arima_fourier, 4), "\n")
+cat("NNAR          MAPE:", round(mape_nnar, 4), "\n")
+cat("STLF          MAPE:", round(mape_stlf, 4), "\n")
+
+inv <- 1 / c(mape_tbats, mape_arima_fourier, mape_nnar, mape_stlf)
+w <- inv / sum(inv)
+names(w) <- c("TBATS", "ARIMA_Fourier", "NNAR", "STLF")
+print(round(w, 3))
+
+submission_ensemble_w <- sub_template %>%
+  mutate(load = w["TBATS"]         * sub_tbats$load +
+                w["ARIMA_Fourier"] * sub_arima_fourier$load +
+                w["NNAR"]          * sub_nnar$load +
+                w["STLF"]          * sub_stlf$load)
+
+write.csv(submission_ensemble_w,
+          "submission_ensemble_weighted.csv",
+          row.names = FALSE)
+
+head(submission_ensemble_w)
+```
+
