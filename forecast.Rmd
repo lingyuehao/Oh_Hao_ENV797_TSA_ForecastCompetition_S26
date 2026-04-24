@@ -1,0 +1,1244 @@
+---
+title: "Forecasting Competition Challenges"
+author: "Lingyue Hao, Seohyun Oh"
+date: "`r Sys.Date()`"
+output: pdf_document
+
+---
+
+# Github Repo 
+https://github.com/lingyuehao/Oh_Hao_ENV797_TSA_ForecastCompetition_S26
+
+# Setup
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = FALSE,
+  message = FALSE
+)
+```
+
+```{r}
+library(readxl)
+library(dplyr)
+library(tidyr)
+library(lubridate)
+library(stringr)
+library(forecast)
+library(ggplot2)
+```
+
+# Load Data
+
+```{r}
+load_raw <- read_excel("data/load.xlsx")
+temp_raw <- read_excel("data/temperature.xlsx")
+rh_raw   <- read_excel("data/relative_humidity.xlsx")
+sub_template <- read.csv("output/submission_template.csv")
+```
+
+```{r}
+glimpse(load_raw)
+glimpse(temp_raw)
+glimpse(rh_raw)
+```
+
+```{r}
+names(load_raw)
+names(temp_raw)
+names(rh_raw)
+
+head(load_raw)
+head(temp_raw)
+head(rh_raw)
+
+```
+
+```{r}
+tail(load_raw$date)
+tail(temp_raw$date)
+tail(rh_raw$date)
+```
+
+# Data Preprocessing
+
+```{r}
+## transfer load to daily
+load_daily <- load_raw %>%
+  mutate(date = as.Date(date)) %>%
+  mutate(
+    load_daily = rowMeans(select(., starts_with("h")), na.rm = TRUE)
+  ) %>%
+  select(date, load_daily)
+```
+
+```{r}
+## transfer temp to daily
+temp_daily <- temp_raw %>%
+  mutate(date = as.Date(date)) %>%
+  mutate(
+    temp_hourly_avg = rowMeans(select(., starts_with("t_ws")), na.rm = TRUE)
+  ) %>%
+  group_by(date) %>%
+  summarise(
+    temp_daily = mean(temp_hourly_avg, na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+```{r}
+## transfer humidity to daily
+rh_daily <- rh_raw %>%
+  mutate(date = as.Date(date)) %>%
+  mutate(
+    rh_hourly_avg = rowMeans(select(., starts_with("rh_ws")), na.rm = TRUE)
+  ) %>%
+  group_by(date) %>%
+  summarise(
+    rh_daily = mean(rh_hourly_avg, na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+```{r}
+## combine daily data
+daily_data <- load_daily %>%
+  left_join(temp_daily, by = "date") %>%
+  left_join(rh_daily, by = "date")
+
+glimpse(daily_data)
+head(daily_data)
+summary(daily_data)
+colSums(is.na(daily_data))
+```
+
+```{r}
+# load 
+daily_load <- daily_data %>% 
+  select(date, load_daily)
+
+# load + temp 
+daily_load_temp <- daily_data %>% 
+  select(date, load_daily, temp_daily)
+
+glimpse(daily_load_temp)
+```
+
+# Train/Validation split
+
+```{r}
+# split train and validation data (load + temp + humid)
+ train_data <- daily_data %>%
+  filter(date <= as.Date("2010-06-30"))
+
+valid_data <- daily_data %>%
+  filter(date >= as.Date("2010-07-01") &
+         date <= as.Date("2010-07-31"))
+
+# split train and validation data (load)
+ train_data_load <- daily_load %>%
+  filter(date <= as.Date("2010-06-30"))
+
+valid_data_load <- daily_load %>%
+  filter(date >= as.Date("2010-07-01") &
+         date <= as.Date("2010-07-31"))
+
+# split train and validation data (load + temp)
+ train_data_load_temp <- daily_load_temp %>%
+  filter(date <= as.Date("2010-06-30"))
+
+valid_data_load_temp <- daily_load_temp %>%
+  filter(date >= as.Date("2010-07-01") &
+         date <= as.Date("2010-07-31"))
+
+# use all available historical data up to 2011-06-30
+full_data <- daily_data %>%
+  filter(date >= as.Date("2005-01-01"),
+         date <= as.Date("2011-06-30")) %>%
+  arrange(date)
+
+full_data_load <- daily_load %>%
+  filter(date >= as.Date("2005-01-01"),
+         date <= as.Date("2011-06-30")) %>%
+  arrange(date)
+
+full_data_load_temp <- daily_load_temp %>%
+  filter(date >= as.Date("2005-01-01"),
+         date <= as.Date("2011-06-30")) %>%
+  arrange(date)
+```
+
+```{r}
+# create time series with weekly seasonality
+train_ts <- ts(train_data$load_daily, frequency = 7)
+train_msts <- msts(train_data$load_daily, seasonal.periods = c(7, 365)) 
+
+train_ts_load <- ts(train_data_load$load_daily, frequency = 7)
+train_msts_load <- msts(train_data_load$load_daily, seasonal.periods = c(7, 365)) 
+
+train_ts_load_temp <- ts(train_data_load_temp$load_daily, frequency = 7)
+train_msts_load_temp <- msts(train_data_load_temp$load_daily, seasonal.periods = c(7, 365)) 
+
+# create time series with weekly seasonality
+full_ts <- ts(full_data$load_daily, frequency = 7)
+full_msts <- msts(full_data$load_daily, seasonal.periods = c(7, 365)) 
+
+full_ts_load <- ts(full_data_load$load_daily, frequency = 7)
+full_msts_load <- msts(full_data_load$load_daily, seasonal.periods = c(7, 365)) 
+
+full_ts_load_temp <- ts(full_data_load_temp$load_daily, frequency = 7)
+full_msts_load_temp <- msts(full_data_load_temp$load_daily, seasonal.periods = c(7, 365)) 
+```
+
+# EDA
+
+```{r}
+ggplot(daily_load, aes(x = date, y = load_daily)) +
+  geom_line() +
+  labs(title = "Daily Load Over Time", x = "Date", y = "Daily Load") +
+  theme_minimal()
+```
+
+> strong seasonality in weekly, yearly (reason for using msts)
+
+```{r}
+ggAcf(train_data_load$load_daily)
+ggPacf(train_data_load$load_daily)
+```
+
+> strong non-stationarity, low-order AR process
+
+```{r}
+fit_mstl <- mstl(train_msts_load)
+autoplot(fit_mstl)
+```
+
+> Trend exists(non-stationary), weak weekly seasonality, strong yearly seasonality
+
+```{r}
+daily_load %>%
+  mutate(weekday = wday(date, label = TRUE)) %>%
+  ggplot(aes(x = weekday, y = load_daily)) +
+  geom_boxplot() +
+  labs(title = "Load by Weekday", x = "Weekday", y = "Daily Load") +
+  theme_minimal()
+```
+
+# Modeling
+
+Among the models evaluated, the ETS model with mean bias correction achieved the best performance on Kaggle, with a score of 0.0928. 
+
+Ensemble models combining ETS and TBATS followed, with scores around 0.10, indicating that while ensembling provided some improvements, the bias-corrected ETS model remained the most effective.
+
+For implementation, ETS was trained using a weekly seasonal structure (`ts` with frequency = 7), as it yielded comparable performance to multi-seasonal formulations. In contrast, TBATS was implemented using `msts` to capture multiple seasonal components in the data.
+
+```{r, include=FALSE}
+## Baseline Model(ETS, TBATS)
+
+## ETS 
+
+# ETS Model Training 
+fit_ets <- ets(train_ts)
+fc_ets <- forecast(fit_ets, h = nrow(valid_data))
+
+# accuracy
+accuracy(fc_ets, valid_data$load_daily)
+
+# plot actual vs forecast on validation dates
+validation_results <- data.frame(
+  date = valid_data$date,
+  actual = valid_data$load_daily,
+  forecast = as.numeric(fc_ets$mean)
+)
+
+ggplot(validation_results, aes(x = date)) +
+  geom_line(aes(y = actual, color = "Actual"), linewidth = 1) +
+  geom_line(aes(y = forecast, color = "ETS"), linewidth = 1) +
+  labs(
+    title = "ETS: Validation Forecast vs Actual",
+    x = "Date",
+    y = "Daily Load",
+    color = ""
+  ) +
+  theme_minimal()
+```
+
+```{r, include=FALSE}
+
+# ETS Model Forecast 
+final_ets <- ets(full_ts)
+final_fc <- forecast(final_ets, h = nrow(sub_template))
+
+# create final submission file
+submission <- sub_template %>%
+  mutate(load = as.numeric(final_fc$mean))
+
+# save csv
+write.csv(submission, "output/submission_ets.csv", row.names = FALSE)
+```
+
+```{r, include=FALSE}
+# TBATS Model Training  
+fit_tbats <- tbats(train_msts)
+fc_tbats <- forecast(fit_tbats, h = nrow(valid_data))
+
+# accuracy
+ac_tbats <- accuracy(fc_tbats, valid_data$load_daily)
+
+# plot actual vs forecast on validation dates
+validation_results_tbats <- data.frame(
+  date = valid_data$date,
+  actual = valid_data$load_daily,
+  forecast = as.numeric(fc_tbats$mean)
+)
+
+ggplot(validation_results_tbats, aes(x = date)) +
+  geom_line(aes(y = actual, color = "Actual"), linewidth = 1) +
+  geom_line(aes(y = forecast, color = "TBATS"), linewidth = 1) +
+  labs(
+    title = "TBATS: Validation Forecast vs Actual",
+    x = "Date",
+    y = "Daily Load",
+    color = ""
+  ) +
+  theme_minimal()
+
+print(ac_tbats)
+```
+
+```{r, include=FALSE}
+# TBATS Model Forecast  
+final_tbats_fit <- tbats(full_msts)
+final_tbats_fc <- forecast(final_tbats_fit, h = nrow(sub_template))
+
+# create final submission file
+submission_tbats <- sub_template %>%
+  mutate(load = as.numeric(final_tbats_fc$mean))
+
+# save csv
+write.csv(submission_tbats, "output/submission_tbats.csv", row.names = FALSE)
+```
+
+## Model 1: ETS with Bias Correction
+
+This model applies mean bias correction to the ETS forecast, which improves accuracy by correcting systematic underestimation observed in the validation set.
+
+```{r}
+# ETS with Validation-based Bias Correction 
+#  Refit ETS on training set to evaluate bias on validation
+fit_ets_R <- ets(train_ts)
+fc_ets_R  <- forecast(fit_ets_R, h = nrow(valid_data))
+
+# Compute mean systematic bias (actual - forecast) on validation
+residuals_valid <- valid_data$load_daily - as.numeric(fc_ets_R$mean)
+mean_bias   <- mean(residuals_valid)
+median_bias <- median(residuals_valid)
+mean_fc     <- mean(fc_ets_R$mean)
+
+cat("Mean bias on validation:", round(mean_bias, 4), "\n")
+cat("Median bias on validation:", round(median_bias, 4), "\n")
+cat("Mean forecast value:", round(mean_fc, 4), "\n")
+cat("Relative mean bias (%):", round(mean_bias / mean_fc * 100, 2), "%\n")
+
+#   Generate final forecast and apply mean bias correction
+fit_ets_final <- ets(full_ts)
+fc_ets_final  <- forecast(fit_ets_final, h = nrow(sub_template))
+
+# Apply additive mean bias correction
+submission_ets_biascorr <- sub_template %>%
+  mutate(load = as.numeric(fc_ets_final$mean) + mean_bias)
+
+write.csv(submission_ets_biascorr, "output/submission_ets_biascorr.csv", row.names = FALSE)
+
+# Preview
+head(submission_ets_biascorr)
+```
+
+## Model 2: ETS with Median Bias Correction
+
+This model uses median bias correction, providing a more robust adjustment against extreme residual values compared to mean correction.
+
+```{r}
+#  ETS with Median Bias Correction  
+
+submission_ets_median_bias <- sub_template %>%
+  mutate(load = as.numeric(fc_ets_final$mean) + median_bias)
+
+write.csv(submission_ets_median_bias, 
+          "output/submission_ets_median_bias.csv", row.names = FALSE)
+
+cat("Median bias used:", round(median_bias, 4), "\n")
+cat("Mean bias was:   ", round(mean_bias, 4), "\n")
+cat("Difference:      ", round(median_bias - mean_bias, 4), "\n")
+
+head(submission_ets_median_bias)
+```
+
+## Model 3: Ensemble: 75% ETS + 25% TBATS
+
+This ensemble combines 75% ETS and 25% TBATS forecasts, placing greater emphasis on ETS while incorporating multi-seasonal information from TBATS.
+
+```{r, eval=FALSE, include=FALSE}
+# Fine-grained weight search for ETS + TBATS 
+sub_ets   <- read.csv("output/submission_ets.csv")
+sub_tbats <- read.csv("output/submission_tbats.csv")
+
+weights_to_try <- c(0.60, 0.65, 0.75, 0.80, 0.85)
+
+for (w_ets in weights_to_try) {
+  w_tbats <- 1 - w_ets
+  sub_tmp <- sub_template %>%
+    mutate(load = w_ets * sub_ets$load + w_tbats * sub_tbats$load)
+  
+  fname <- sprintf("submission_ens_ets%02d_tbats%02d.csv",
+                   round(w_ets * 100), round(w_tbats * 100))
+  write.csv(sub_tmp, fname, row.names = FALSE)
+  cat("Saved:", fname, "\n")
+}
+```
+
+```{r}
+# Ensemble (75/25)
+sub_ets   <- read.csv("output/submission_ets.csv")
+sub_tbats <- read.csv("output/submission_tbats.csv")
+
+submission_ens_ets75_tbats25 <- sub_template %>%
+  mutate(load = 0.75 * sub_ets$load + 0.25 * sub_tbats$load)
+
+write.csv(submission_ens_ets75_tbats25,
+          "output/submission_ens_ets75_tbats25.csv",
+          row.names = FALSE)
+```
+
+## Model 4: Ensemble: 70% ETS + 30% TBATS
+
+This ensemble uses a 70/30 weighting between ETS and TBATS, slightly increasing the contribution of TBATS to better capture multiple seasonal patterns.
+
+```{r}
+# ETS-heavy Weighted Ensemble 
+sub_ets   <- read.csv("output/submission_ets.csv")
+sub_tbats <- read.csv("output/submission_tbats.csv")
+
+ 
+submission_ens_ets_heavy <- sub_template %>%
+  mutate(load = 0.7 * sub_ets$load + 0.3 * sub_tbats$load)
+
+write.csv(submission_ens_ets_heavy,
+          "output/submission_ens_ets_heavy.csv", row.names = FALSE)
+```
+
+## Model 5: Ensemble: 65% ETS + 35% TBATS
+
+This ensemble further increases the TBATS contribution (65/35), allowing more flexibility in modeling complex seasonal structures.
+
+```{r}
+# Ensemble (65/35)
+submission_ens_ets65_tbats35 <- sub_template %>%
+  mutate(load = 0.65 * sub_ets$load + 0.35 * sub_tbats$load)
+
+write.csv(submission_ens_ets65_tbats35,
+          "output/submission_ens_ets65_tbats35.csv",
+          row.names = FALSE)
+```
+
+
+```{r, eval=FALSE, include=FALSE}
+# ETS with Trimmed Mean Bias Correction  
+# Compute trimmed mean (drop 10% from each tail)
+trimmed_bias_10 <- mean(residuals_valid, trim = 0.10)
+trimmed_bias_20 <- mean(residuals_valid, trim = 0.20)
+
+cat("Mean bias:           ", round(mean_bias, 4), "\n")
+cat("Trimmed mean (10%):  ", round(trimmed_bias_10, 4), "\n")
+cat("Trimmed mean (20%):  ", round(trimmed_bias_20, 4), "\n")
+cat("Median bias:         ", round(median_bias, 4), "\n")
+
+# Generate submission with 10% trimmed mean
+submission_ets_trimmed10 <- sub_template %>%
+  mutate(load = as.numeric(fc_ets_final$mean) + trimmed_bias_10)
+
+write.csv(submission_ets_trimmed10, 
+          "output/submission_ets_trimmed10.csv", row.names = FALSE)
+
+head(submission_ets_trimmed10)
+```
+
+```{r, eval=FALSE, include=FALSE}
+#  ETS with explicit weekly seasonality tuning  
+
+fit_ets_AAA <- ets(train_ts, model = "AAA")
+fc_ets_AAA <- forecast(fit_ets_AAA, h = nrow(valid_data))
+print(accuracy(fc_ets_AAA, valid_data$load_daily))
+
+fit_ets_AAdA <- ets(train_ts, model = "AAA", damped = TRUE)
+fc_ets_AAdA <- forecast(fit_ets_AAdA, h = nrow(valid_data))
+print(accuracy(fc_ets_AAdA, valid_data$load_daily))
+
+mape_AAA  <- accuracy(fc_ets_AAA,  valid_data$load_daily)["Test set","MAPE"]
+mape_AAdA <- accuracy(fc_ets_AAdA, valid_data$load_daily)["Test set","MAPE"]
+
+if (mape_AAdA < mape_AAA) {
+  cat("Winner: AAdA (damped)\n")
+  fit_final <- ets(full_ts, model = "AAA", damped = TRUE)
+} else {
+  cat("Winner: AAA\n")
+  fit_final <- ets(full_ts, model = "AAA")
+}
+
+fc_final <- forecast(fit_final, h = nrow(sub_template))
+
+submission_ets_tuned <- sub_template %>%
+  mutate(load = as.numeric(fc_final$mean))
+
+write.csv(submission_ets_tuned, "submission_ets_tuned.csv", row.names = FALSE)
+```
+
+```{r, eval=FALSE, include=FALSE}
+#  ETS on log-transformed data  
+# log transform
+train_ts_log <- ts(log(train_data$load_daily), frequency = 7)
+full_ts_log  <- ts(log(full_data$load_daily), frequency = 7)
+
+# training on log scale
+fit_ets_log <- ets(train_ts_log)
+fc_ets_log <- forecast(fit_ets_log, h = nrow(valid_data))
+
+fc_ets_log_mean <- exp(as.numeric(fc_ets_log$mean))
+
+# accuracy
+print(fit_ets_log)   
+cat("MAPE:",
+    mean(abs(fc_ets_log_mean - valid_data$load_daily) / valid_data$load_daily) * 100,
+    "\n")
+
+# plot
+validation_results_ets_log <- data.frame(
+  date = valid_data$date,
+  actual = valid_data$load_daily,
+  forecast = fc_ets_log_mean
+)
+
+ggplot(validation_results_ets_log, aes(x = date)) +
+  geom_line(aes(y = actual, color = "Actual"), linewidth = 1) +
+  geom_line(aes(y = forecast, color = "ETS-log"), linewidth = 1) +
+  labs(title = "ETS on log-transformed data", x = "Date", y = "Daily Load", color = "") +
+  theme_minimal()
+
+# final forecast  
+fit_ets_log_final <- ets(full_ts_log)
+fc_ets_log_final <- forecast(fit_ets_log_final, h = nrow(sub_template))
+
+submission_ets_log <- sub_template %>%
+  mutate(load = exp(as.numeric(fc_ets_log_final$mean)))
+
+write.csv(submission_ets_log, "submission_ets_log.csv", row.names = FALSE)
+```
+
+```{r, eval=FALSE, include=FALSE}
+# ETS trained on recent 3 years only 
+
+train_data_recent <- train_data %>%
+  filter(date >= as.Date("2008-07-01"))
+
+full_data_recent <- full_data %>%
+  filter(date >= as.Date("2008-07-01"))
+
+train_ts_recent <- ts(train_data_recent$load_daily, frequency = 7)
+full_ts_recent  <- ts(full_data_recent$load_daily, frequency = 7)
+fit_ets_recent <- ets(train_ts_recent)
+fc_ets_recent <- forecast(fit_ets_recent, h = nrow(valid_data))
+
+print(fit_ets_recent)
+print(accuracy(fc_ets_recent, valid_data$load_daily))
+
+fit_ets_recent_final <- ets(full_ts_recent)
+fc_ets_recent_final <- forecast(fit_ets_recent_final, h = nrow(sub_template))
+
+submission_ets_recent <- sub_template %>%
+  mutate(load = as.numeric(fc_ets_recent_final$mean))
+
+write.csv(submission_ets_recent, "submission_ets_recent.csv", row.names = FALSE)
+```
+
+```{r, eval=FALSE, include=FALSE}
+#  Ensemble of Top 2 (ETS + TBATS) 
+sub_ets   <- read.csv("submission_ets.csv")
+sub_tbats <- read.csv("submission_tbats.csv")
+
+submission_ens_top2 <- sub_template %>%
+  mutate(load = (sub_ets$load + sub_tbats$load) / 2)
+
+write.csv(submission_ens_top2, "submission_ens_top2.csv", row.names = FALSE)
+```
+
+```{r, eval=FALSE, include=FALSE}
+### Some Analysis based on bias pattern:
+
+library(lubridate)
+
+# Recompute validation residuals (actual - forecast)
+fit_ets_diag <- ets(train_ts)
+fc_ets_diag  <- forecast(fit_ets_diag, h = nrow(valid_data))
+
+residuals_df <- data.frame(
+  date = valid_data$date,
+  actual = valid_data$load_daily,
+  forecast = as.numeric(fc_ets_diag$mean),
+  residual = valid_data$load_daily - as.numeric(fc_ets_diag$mean),
+  weekday = wday(valid_data$date, label = TRUE),
+  day_of_month = day(valid_data$date)
+)
+
+# 1. Overall bias stats
+cat("=== Overall bias ===\n")
+cat("Mean bias:    ", round(mean(residuals_df$residual), 4), "\n")
+cat("Median bias:  ", round(median(residuals_df$residual), 4), "\n")
+cat("SD of bias:   ", round(sd(residuals_df$residual), 4), "\n\n")
+
+# 2. Bias by weekday
+cat("=== Bias by weekday ===\n")
+weekday_bias <- residuals_df %>%
+  group_by(weekday) %>%
+  summarise(
+    mean_bias = round(mean(residual), 4),
+    n = n()
+  )
+print(weekday_bias)
+
+# 3. Bias trend over time  
+cat("\n=== Bias by week-of-month ===\n")
+residuals_df$week_of_month <- ceiling(residuals_df$day_of_month / 7)
+weekly_bias <- residuals_df %>%
+  group_by(week_of_month) %>%
+  summarise(
+    mean_bias = round(mean(residual), 4),
+    n = n()
+  )
+print(weekly_bias)
+
+# 4. Visualize residuals over time
+ggplot(residuals_df, aes(x = date, y = residual)) +
+  geom_line(color = "steelblue") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  geom_hline(yintercept = mean(residuals_df$residual),
+             linetype = "dashed", color = "darkgreen") +
+  labs(title = "ETS Residuals on Validation (July 2010)",
+       subtitle = "Red = zero, Green = mean bias",
+       x = "Date", y = "Residual (Actual - Forecast)") +
+  theme_minimal()
+```
+
+```{r, eval=FALSE, include=FALSE}
+# ARIMA(+Weather) Model Training  
+train_xreg <- train_data_load_temp$temp_daily
+valid_xreg <- valid_data_load_temp$temp_daily
+
+fit_arima_temp <- auto.arima(train_msts_load_temp, xreg = train_xreg, seasonal=FALSE)
+fc_arima_temp <- forecast(fit_arima_temp, xreg = valid_xreg)
+
+# accuracy
+ac_arima_temp <- accuracy(fc_arima_temp, valid_data_load_temp$load_daily)
+
+# plot actual vs forecast on validation dates
+validation_results_arima <- data.frame(
+  date = valid_data_load_temp$date,
+  actual = valid_data_load_temp$load_daily,
+  forecast = as.numeric(fc_arima_temp$mean)
+)
+
+ggplot(validation_results_arima, aes(x = date)) +
+  geom_line(aes(y = actual, color = "Actual"), linewidth = 1) +
+  geom_line(aes(y = forecast, color = "ARIMA"), linewidth = 1) +
+  labs(
+    title = "ARIMA: Validation Forecast vs Actual",
+    x = "Date",
+    y = "Daily Load",
+    color = ""
+  ) +
+  theme_minimal()
+
+print(ac_arima_temp)
+```
+
+```{r, eval=FALSE, include=FALSE}
+# ARIMA + Fourier Model Training (Grid Search on K) 
+
+K_grid <- list(
+  c(1, 1),
+  c(2, 2),
+  c(1, 3),
+  c(2, 3),
+  c(3, 3),
+  c(2, 5)
+)
+
+results_arima_fourier <- data.frame(
+  K_weekly = integer(),
+  K_yearly = integer(),
+  ARIMA_Order = character(),
+  Seasonal_Order = character(),
+  AICc = numeric(),
+  RMSE = numeric(),
+  MAE = numeric(),
+  MAPE = numeric(),
+  stringsAsFactors = FALSE
+)
+
+best_fit_arima_fourier <- NULL
+best_fc_arima_fourier <- NULL
+best_K <- NULL
+best_mape <- Inf
+
+for (K in K_grid) {
+  
+  train_fourier <- fourier(train_msts_load, K = K)
+  valid_fourier <- fourier(train_msts_load, K = K, h = nrow(valid_data))
+  
+  fit_arima_fourier <- auto.arima(
+    train_data_load$load_daily,
+    xreg = train_fourier,
+    seasonal = FALSE,
+    stepwise = FALSE,
+    approximation = FALSE
+  )
+  
+  fc_arima_fourier <- forecast(
+    fit_arima_fourier,
+    xreg = valid_fourier
+  )
+  
+  acc <- accuracy(fc_arima_fourier, valid_data$load_daily)
+  
+  current_mape <- acc["Test set", "MAPE"]
+  
+  results_arima_fourier <- rbind(
+    results_arima_fourier,
+    data.frame(
+      K_weekly = K[1],
+      K_yearly = K[2],
+      ARIMA_Order = paste0(
+        "(",
+        fit_arima_fourier$arma[1], ",",
+        fit_arima_fourier$arma[6], ",",
+        fit_arima_fourier$arma[2], ")"
+      ),
+      Seasonal_Order = paste0(
+        "(",
+        fit_arima_fourier$arma[3], ",",
+        fit_arima_fourier$arma[7], ",",
+        fit_arima_fourier$arma[4], ")"
+      ),
+      AICc = fit_arima_fourier$aicc,
+      RMSE = acc["Test set", "RMSE"],
+      MAE  = acc["Test set", "MAE"],
+      MAPE = current_mape
+    )
+  )
+  
+  if (current_mape < best_mape) {
+    best_mape <- current_mape
+    best_fit_arima_fourier <- fit_arima_fourier
+    best_fc_arima_fourier <- fc_arima_fourier
+    best_K <- K
+  }
+}
+
+# sort by MAPE
+results_arima_fourier <- results_arima_fourier %>%
+  arrange(MAPE)
+
+# show summary table
+print(results_arima_fourier)
+
+# best model summary
+cat("Best K:", best_K[1], best_K[2], "\n")
+cat("Best validation MAPE:", best_mape, "\n")
+print(best_fit_arima_fourier)
+```
+
+```{r, eval=FALSE, include=FALSE}
+# ARIMA + Fourier Model Forecast (Best K) 
+
+full_fourier <- fourier(full_msts_load, K = best_K)
+future_fourier <- fourier(full_msts_load, K = best_K, h = nrow(sub_template))
+
+fit_arima_fourier_final <- auto.arima(
+  full_data_load$load_daily,
+  xreg = full_fourier,
+  seasonal = FALSE,
+  stepwise = FALSE,
+  approximation = FALSE
+)
+
+fc_arima_fourier_final <- forecast(
+  fit_arima_fourier_final,
+  xreg = future_fourier
+)
+
+submission_arima_fourier <- sub_template %>%
+  mutate(load = as.numeric(fc_arima_fourier_final$mean))
+
+write.csv(
+  submission_arima_fourier,
+  "submission_arima_fourier_bestK.csv",
+  row.names = FALSE
+)
+```
+
+```{r, eval=FALSE, include=FALSE}
+#  ARIMA + Fourier Model Training 
+K <- c(2, 2)
+
+train_fourier <- fourier(train_msts_load, K = K)
+valid_fourier <- fourier(train_msts_load, K = K, h = nrow(valid_data))
+
+fit_arima_fourier <- auto.arima(
+  train_data$load_daily,
+  xreg = train_fourier,
+  seasonal = FALSE,
+  stepwise = FALSE,
+  approximation = FALSE
+)
+
+fc_arima_fourier <- forecast(
+  fit_arima_fourier,
+  xreg = valid_fourier
+)
+
+# accuracy
+ac_arima_fourier <- accuracy(fc_arima_fourier, valid_data$load_daily)
+print(ac_arima_fourier)
+
+# plot actual vs forecast
+validation_results_arima_fourier <- data.frame(
+  date = valid_data$date,
+  actual = valid_data$load_daily,
+  forecast = as.numeric(fc_arima_fourier$mean)
+)
+
+ggplot(validation_results_arima_fourier, aes(x = date)) +
+  geom_line(aes(y = actual, color = "Actual"), linewidth = 1) +
+  geom_line(aes(y = forecast, color = "Forecast"), linewidth = 1) +
+  labs(
+    title = "Fourier + ARIMA: Validation Forecast vs Actual",
+    x = "Date",
+    y = "Daily Load",
+    color = ""
+  ) +
+  theme_minimal()
+```
+
+```{r, eval=FALSE, include=FALSE}
+# ARIMA + Fourier Model Forecast  
+K <- c(2, 2)
+
+full_fourier <- fourier(full_msts_load, K = K)
+future_fourier <- fourier(full_msts_load, K = K, h = nrow(sub_template))
+
+fit_arima_fourier_final <- auto.arima(
+  full_data_load$load_daily,
+  xreg = full_fourier,
+  seasonal = FALSE,
+  stepwise = FALSE,
+  approximation = FALSE
+)
+
+fc_arima_fourier_final <- forecast(
+  fit_arima_fourier_final,
+  xreg = future_fourier
+)
+
+submission_arima_fourier <- sub_template %>%
+  mutate(load = as.numeric(fc_arima_fourier_final$mean))
+
+write.csv(
+  submission_arima_fourier,
+  "submission_arima_fourier.csv",
+  row.names = FALSE
+)
+```
+
+```{r, eval=FALSE, include=FALSE}
+# ARIMA + Fourier Model Training  
+train_data_sq <- train_data %>%
+  mutate(temp_sq = temp_daily^2)
+
+valid_data_sq <- valid_data %>%
+  mutate(temp_sq = temp_daily^2)
+
+train_msts_sq <- msts(
+  train_data_sq$load_daily,
+  seasonal.periods = c(7, 365.25)
+)
+
+K <- c(2, 2)
+
+train_fourier <- fourier(train_msts_sq, K = K)
+valid_fourier <- fourier(train_msts_sq, K = K, h = nrow(valid_data_sq))
+
+train_xreg <- cbind(
+  train_fourier,
+  temp_daily = train_data_sq$temp_daily,
+  temp_sq    = train_data_sq$temp_sq,
+  rh_daily   = train_data_sq$rh_daily
+)
+
+valid_xreg <- cbind(
+  valid_fourier,
+  temp_daily = valid_data_sq$temp_daily,
+  temp_sq    = valid_data_sq$temp_sq,
+  rh_daily   = valid_data_sq$rh_daily
+)
+
+fit_arima_weather <- auto.arima(
+  train_data_sq$load_daily,
+  xreg = train_xreg,
+  seasonal = FALSE,
+  stepwise = FALSE,
+  approximation = FALSE
+)
+
+fc_arima_weather <- forecast(
+  fit_arima_weather,
+  xreg = valid_xreg
+)
+
+# accuracy
+ac_arima_weather <- accuracy(fc_arima_weather, valid_data_sq$load_daily)
+print(ac_arima_weather)
+
+# plot actual vs forecast on validation dates
+validation_results_arima <- data.frame(
+  date = valid_data_sq$date,
+  actual = valid_data_sq$load_daily,
+  forecast = as.numeric(fc_arima_weather$mean)
+)
+
+ggplot(validation_results_arima, aes(x = date)) +
+  geom_line(aes(y = actual, color = "Actual"), linewidth = 1) +
+  geom_line(aes(y = forecast, color = "Forecast"), linewidth = 1) +
+  labs(
+    title = "Fourier + ARIMA + Temperature + Humidity",
+    x = "Date",
+    y = "Daily Load",
+    color = ""
+  ) +
+  theme_minimal()
+```
+
+```{r, eval=FALSE, include=FALSE}
+# ARIMA + Fourier Model Forecast 
+full_data_sq <- full_data %>%
+  mutate(temp_sq = temp_daily^2)
+
+full_msts_sq <- msts(
+  full_data_sq$load_daily,
+  seasonal.periods = c(7, 365.25)
+)
+
+K <- c(2, 2)
+
+full_fourier <- fourier(full_msts_sq, K = K)
+future_fourier <- fourier(full_msts_sq, K = K, h = nrow(sub_template))
+
+full_xreg <- cbind(
+  full_fourier,
+  temp_daily = full_data_sq$temp_daily,
+  temp_sq    = full_data_sq$temp_sq,
+  rh_daily   = full_data_sq$rh_daily
+)
+
+# temperature forecast 
+temp_ts <- msts(full_data$temp_daily, seasonal.periods = c(7, 365.25))
+fit_temp <- auto.arima(temp_ts, seasonal = FALSE)
+fc_temp <- forecast(fit_temp, h = nrow(sub_template))
+
+# humidiy forecast 
+rh_ts <- msts(full_data$rh_daily, seasonal.periods = c(7, 365.25))
+fit_rh <- auto.arima(rh_ts, seasonal = FALSE)
+fc_rh <- forecast(fit_rh, h = nrow(sub_template))
+
+# future xreg 
+future_xreg <- cbind(
+  future_fourier,
+  temp_daily = as.numeric(fc_temp$mean),
+  temp_sq    = as.numeric(fc_temp$mean)^2,
+  rh_daily   = as.numeric(fc_rh$mean)
+)
+
+fit_arima_fourier_weather <- auto.arima(
+  full_data_sq$load_daily,
+  xreg = full_xreg,
+  seasonal = FALSE,
+  stepwise = FALSE,
+  approximation = FALSE
+)
+
+fc_arima_fourier_weather <- forecast(
+  fit_arima_fourier_weather,
+  xreg = future_xreg
+)
+
+# create final submission file
+submission_arima_fourier_weather <- sub_template %>%
+  mutate(load = as.numeric(fc_arima_fourier_weather$mean))
+
+write.csv(
+  submission_arima_fourier_weather,
+  "submission_arima_fourier_weather.csv",
+  row.names = FALSE
+)
+```
+
+```{r, eval=FALSE, include=FALSE}
+# Neural Network (NNAR) + Fourier  
+
+set.seed(797)   
+
+K_nn <- c(2, 6)  
+
+# training
+train_fourier_nn <- fourier(train_msts_load, K = K_nn)
+valid_fourier_nn <- fourier(train_msts_load, K = K_nn, h = nrow(valid_data))
+
+fit_nnar <- nnetar(
+  train_msts_load,
+  p = 2, P = 1,
+  xreg = train_fourier_nn
+)
+
+fc_nnar <- forecast(fit_nnar, xreg = valid_fourier_nn, h = nrow(valid_data))
+
+ac_nnar <- accuracy(fc_nnar, valid_data$load_daily)
+print(ac_nnar)
+
+# plot
+validation_results_nnar <- data.frame(
+  date = valid_data$date,
+  actual = valid_data$load_daily,
+  forecast = as.numeric(fc_nnar$mean)
+)
+
+ggplot(validation_results_nnar, aes(x = date)) +
+  geom_line(aes(y = actual, color = "Actual"), linewidth = 1) +
+  geom_line(aes(y = forecast, color = "NNAR"), linewidth = 1) +
+  labs(title = "NNAR + Fourier: Validation vs Actual",
+       x = "Date", y = "Daily Load", color = "") +
+  theme_minimal()
+
+#  final forecast 
+set.seed(797)
+full_fourier_nn   <- fourier(full_msts_load, K = K_nn)
+future_fourier_nn <- fourier(full_msts_load, K = K_nn, h = nrow(sub_template))
+
+fit_nnar_final <- nnetar(
+  full_msts_load,
+  p = 2, P = 1,
+  xreg = full_fourier_nn
+)
+
+fc_nnar_final <- forecast(fit_nnar_final,
+                          xreg = future_fourier_nn,
+                          h = nrow(sub_template))
+
+submission_nnar <- sub_template %>%
+  mutate(load = as.numeric(fc_nnar_final$mean))
+
+write.csv(submission_nnar, "submission_nnar_fourier.csv", row.names = FALSE)
+```
+
+```{r, eval=FALSE, include=FALSE}
+# ARIMA + Fourier with Extended K Grid  
+
+K_grid_ext <- list(
+  c(2, 6),
+  c(3, 6),
+  c(2, 8),
+  c(3, 8),
+  c(2, 10),
+  c(3, 10),
+  c(2, 12)
+)
+
+results_ext <- data.frame()
+best_mape_ext <- Inf
+best_K_ext <- NULL
+
+for (K in K_grid_ext) {
+  
+  train_f <- fourier(train_msts_load, K = K)
+  valid_f <- fourier(train_msts_load, K = K, h = nrow(valid_data))
+  
+  fit_tmp <- auto.arima(train_data_load$load_daily,
+                        xreg = train_f,
+                        seasonal = FALSE,
+                        stepwise = TRUE,       # faster
+                        approximation = TRUE)
+  
+  fc_tmp <- forecast(fit_tmp, xreg = valid_f)
+  acc_tmp <- accuracy(fc_tmp, valid_data$load_daily)
+  
+  results_ext <- rbind(results_ext, data.frame(
+    K_weekly = K[1],
+    K_yearly = K[2],
+    AICc = fit_tmp$aicc,
+    MAPE = acc_tmp["Test set", "MAPE"],
+    RMSE = acc_tmp["Test set", "RMSE"]
+  ))
+  
+  if (acc_tmp["Test set", "MAPE"] < best_mape_ext) {
+    best_mape_ext <- acc_tmp["Test set", "MAPE"]
+    best_K_ext <- K
+  }
+}
+
+results_ext <- results_ext %>% arrange(MAPE)
+print(results_ext)
+cat("Best K (extended):", best_K_ext[1], best_K_ext[2],
+    " | Validation MAPE:", best_mape_ext, "\n")
+
+# final forecast with best K  
+full_f_ext   <- fourier(full_msts_load, K = best_K_ext)
+future_f_ext <- fourier(full_msts_load, K = best_K_ext, h = nrow(sub_template))
+
+fit_ext_final <- auto.arima(full_data_load$load_daily,
+                            xreg = full_f_ext,
+                            seasonal = FALSE,
+                            stepwise = FALSE,
+                            approximation = FALSE)
+
+fc_ext_final <- forecast(fit_ext_final, xreg = future_f_ext)
+
+submission_arima_fourier_extK <- sub_template %>%
+  mutate(load = as.numeric(fc_ext_final$mean))
+
+write.csv(submission_arima_fourier_extK,
+          "submission_arima_fourier_extK.csv",
+          row.names = FALSE)
+```
+
+```{r, eval=FALSE, include=FALSE}
+#  STLF + ARIMA
+
+# training
+fit_stlf <- stlf(train_msts_load,
+                 h = nrow(valid_data),
+                 method = "arima",
+                 s.window = "periodic",
+                 robust = TRUE)
+
+ac_stlf <- accuracy(fit_stlf, valid_data$load_daily)
+print(ac_stlf)
+
+# plot
+validation_results_stlf <- data.frame(
+  date = valid_data$date,
+  actual = valid_data$load_daily,
+  forecast = as.numeric(fit_stlf$mean)
+)
+
+ggplot(validation_results_stlf, aes(x = date)) +
+  geom_line(aes(y = actual, color = "Actual"), linewidth = 1) +
+  geom_line(aes(y = forecast, color = "STLF+ARIMA"), linewidth = 1) +
+  labs(title = "STLF + ARIMA: Validation vs Actual",
+       x = "Date", y = "Daily Load", color = "") +
+  theme_minimal()
+
+#   final forecast 
+fit_stlf_final <- stlf(full_msts_load,
+                       h = nrow(sub_template),
+                       method = "arima",
+                       s.window = "periodic",
+                       robust = TRUE)
+
+submission_stlf <- sub_template %>%
+  mutate(load = as.numeric(fit_stlf_final$mean))
+
+write.csv(submission_stlf, "submission_stlf_arima.csv", row.names = FALSE)
+```
+
+```{r, eval=FALSE, include=FALSE}
+# Ensemble (Simple Average) 
+sub_tbats         <- read.csv("submission_tbats.csv")
+sub_arima_fourier <- read.csv("submission_arima_fourier.csv")
+sub_nnar          <- read.csv("submission_nnar_fourier.csv")
+sub_stlf          <- read.csv("submission_stlf_arima.csv")
+
+# simple average of 4 models
+submission_ensemble_avg <- sub_template %>%
+  mutate(load = (sub_tbats$load +
+                 sub_arima_fourier$load +
+                 sub_nnar$load +
+                 sub_stlf$load) / 4)
+
+write.csv(submission_ensemble_avg,
+          "submission_ensemble_avg.csv",
+          row.names = FALSE)
+
+head(submission_ensemble_avg)
+```
+
+```{r, eval=FALSE, include=FALSE}
+# Ensemble (Weighted by Validation MAPE)
+ 
+mape_tbats         <- accuracy(fc_tbats, valid_data$load_daily)["Test set", "MAPE"]
+mape_arima_fourier <- accuracy(fc_arima_fourier, valid_data$load_daily)["Test set", "MAPE"]
+mape_nnar          <- accuracy(fc_nnar, valid_data$load_daily)["Test set", "MAPE"]
+mape_stlf          <- accuracy(fit_stlf, valid_data$load_daily)["Test set", "MAPE"]
+
+cat("TBATS         MAPE:", round(mape_tbats, 4), "\n")
+cat("ARIMA+Fourier MAPE:", round(mape_arima_fourier, 4), "\n")
+cat("NNAR          MAPE:", round(mape_nnar, 4), "\n")
+cat("STLF          MAPE:", round(mape_stlf, 4), "\n")
+
+inv <- 1 / c(mape_tbats, mape_arima_fourier, mape_nnar, mape_stlf)
+w <- inv / sum(inv)
+names(w) <- c("TBATS", "ARIMA_Fourier", "NNAR", "STLF")
+print(round(w, 3))
+
+submission_ensemble_w <- sub_template %>%
+  mutate(load = w["TBATS"]         * sub_tbats$load +
+                w["ARIMA_Fourier"] * sub_arima_fourier$load +
+                w["NNAR"]          * sub_nnar$load +
+                w["STLF"]          * sub_stlf$load)
+
+write.csv(submission_ensemble_w,
+          "submission_ensemble_weighted.csv",
+          row.names = FALSE)
+
+head(submission_ensemble_w)
+```
+
+```{r, eval=FALSE, include=FALSE}
+# STLF + ETS  
+
+fit_stlf_ets <- stlf(train_msts_load,
+                     h = nrow(valid_data),
+                     method = "ets",
+                     s.window = "periodic",
+                     robust = TRUE)
+
+ac_stlf_ets <- accuracy(fit_stlf_ets, valid_data$load_daily)
+print(ac_stlf_ets)
+
+# final forecast
+fit_stlf_ets_final <- stlf(full_msts_load,
+                           h = nrow(sub_template),
+                           method = "ets",
+                           s.window = "periodic",
+                           robust = TRUE)
+
+submission_stlf_ets <- sub_template %>%
+  mutate(load = as.numeric(fit_stlf_ets_final$mean))
+
+write.csv(submission_stlf_ets, "submission_stlf_ets.csv", row.names = FALSE)
+```
+
+# AI Usage
+
+Generative AI tools (ChatGPT) were used to assist with code organization, debugging, and improving the clarity of written explanations. 
+
+Specifically, AI was used to refine R code structure, resolve errors related to file paths and LaTeX compilation, and enhance the presentation of results in a more professional format. 
+
+All modeling decisions, including model selection, bias correction methods, and evaluation strategies, were independently developed and verified by the authors.
